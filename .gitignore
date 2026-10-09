@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 faiss_index/
 .streamlit/
+# Runtime logs
+*.log
+nohup.out
