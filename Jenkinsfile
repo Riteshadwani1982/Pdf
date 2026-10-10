@@ -15,7 +15,7 @@ environment {
     ECS_CLUSTER      = 'pdf-bot'
     ECS_SERVICE      = 'pdf-bot-service-rpegt7y1'
     TASK_FAMILY      = 'pdf-bot'
-    CONTAINER_NAME   = 'pdf-bot-container'
+    CONTAINER_NAME   = 'Main'
 }
 
     stages {
