@@ -1,0 +1,11 @@
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+port = 8501
+address = "0.0.0.0"
+
+[browser]
+serverAddress = "PDFBOTALB-2139349760.us-east-1.elb.amazonaws.com"
+serverPort = 80
+gatherUsageStats = false
