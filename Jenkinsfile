@@ -7,15 +7,16 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    environment {
-        AWS_REGION       = 'us-east-1'
-        AWS_ACCOUNT_ID   = '692859921402'
-        ECR_REPOSITORY   = 'pdf-bot'
-        ECS_CLUSTER      = 'pdf-bot-cluster'
-        ECS_SERVICE      = 'pdf-bot-service'
-        TASK_FAMILY      = 'pdf-bot-task'
-        CONTAINER_NAME   = 'pdf-bot-container'
-    }
+    
+environment {
+    AWS_REGION       = 'us-east-1'
+    AWS_ACCOUNT_ID   = '692859921402'
+    ECR_REPOSITORY   = 'pdf-bot'
+    ECS_CLUSTER      = 'pdf-bot'
+    ECS_SERVICE      = 'pdf-bot-service-rpegt7y1'
+    TASK_FAMILY      = 'pdf-bot'
+    CONTAINER_NAME   = 'pdf-bot-container'
+}
 
     stages {
         stage('Checkout') {
