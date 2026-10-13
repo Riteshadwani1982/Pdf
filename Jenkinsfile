@@ -6,44 +6,71 @@ pipeline {
         timestamps()
         disableConcurrentBuilds()
     }
-    triggers {
-        githubPush()
+
+    environment {
+        AWS_REGION       = 'us-east-1'
+        AWS_ACCOUNT_ID   = '692859921402'
+        ECR_REPOSITORY   = 'pdf-bot'
+        ECS_CLUSTER      = 'pdf-bot'
     }
 
-    
-environment {
-    AWS_REGION       = 'us-east-1'
-    AWS_ACCOUNT_ID   = '692859921402'
-    ECR_REPOSITORY   = 'pdf-bot'
-    ECS_CLUSTER      = 'pdf-bot'
-    ECS_SERVICE      = 'pdf-bot-service-rpegt7y1'
-    TASK_FAMILY      = 'pdf-bot'
-    CONTAINER_NAME   = 'Main'
-}
-
     stages {
+        stage('Select Deployment Environment') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'main') {
+                        env.TARGET_ENV = 'prod'
+                        env.ECS_SERVICE = 'pdf-bot-service-rpegt7y1'
+                        env.TASK_FAMILY = 'pdf-bot'
+                        env.CONTAINER_NAME = 'Main'
+                    } else if (env.BRANCH_NAME == 'Development') {
+                        env.TARGET_ENV = 'dev'
+                        env.ECS_SERVICE = 'pdf-bot-dev-service'
+                        env.TASK_FAMILY = 'pdf-bot-dev'
+                        env.CONTAINER_NAME = 'Pdf-bot-dev'
+                    } else {
+                        error(
+                            "Deployment is not configured for branch: " +
+                            "${env.BRANCH_NAME}"
+                        )
+                    }
+
+                    env.ECR_URI =
+                        "${env.AWS_ACCOUNT_ID}.dkr.ecr." +
+                        "${env.AWS_REGION}.amazonaws.com/" +
+                        "${env.ECR_REPOSITORY}"
+
+                    echo "Branch: ${env.BRANCH_NAME}"
+                    echo "Environment: ${env.TARGET_ENV}"
+                    echo "ECS Cluster: ${env.ECS_CLUSTER}"
+                    echo "ECS Service: ${env.ECS_SERVICE}"
+                    echo "Task Family: ${env.TASK_FAMILY}"
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/Riteshadwani1982/Pdf.git'
+                checkout scm
             }
         }
 
         stage('Prepare Image Tag') {
             steps {
                 script {
-                    env.IMAGE_TAG = sh(
+                    def commitSha = sh(
                         script: 'git rev-parse --short=12 HEAD',
                         returnStdout: true
                     ).trim()
 
-                    env.ECR_URI =
-                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+                    env.IMAGE_TAG = "${env.TARGET_ENV}-${commitSha}"
 
-                    env.IMAGE_URI = "${ECR_URI}:${IMAGE_TAG}"
+                    env.IMAGE_URI =
+                        "${env.ECR_URI}:${env.IMAGE_TAG}"
+
+                    echo "Image tag: ${env.IMAGE_TAG}"
+                    echo "Image URI: ${env.IMAGE_URI}"
                 }
-
-                echo "Image to build: ${IMAGE_URI}"
             }
         }
 
@@ -60,7 +87,9 @@ environment {
             steps {
                 sh '''
                     set -eu
-                    aws ecr get-login-password --region "$AWS_REGION" |
+
+                    aws ecr get-login-password \
+                        --region "$AWS_REGION" |
                     docker login \
                         --username AWS \
                         --password-stdin \
@@ -93,29 +122,37 @@ environment {
 import json
 import os
 
-source = "task-definition-current.json"
-with open(source, encoding="utf-8") as f:
+with open("task-definition-current.json", encoding="utf-8") as f:
     task = json.load(f)
 
+# Remove AWS-generated fields before registering a new revision.
 for key in (
-    "taskDefinitionArn", "revision", "status",
-    "requiresAttributes", "compatibilities",
-    "registeredAt", "registeredBy"
+    "taskDefinitionArn",
+    "revision",
+    "status",
+    "requiresAttributes",
+    "compatibilities",
+    "registeredAt",
+    "registeredBy",
+    "deregisteredAt"
 ):
     task.pop(key, None)
 
 container_name = os.environ["CONTAINER_NAME"]
 image_uri = os.environ["IMAGE_URI"]
 
-matches = [
-    c for c in task["containerDefinitions"]
-    if c["name"] == container_name
-]
+containers = task.get("containerDefinitions", [])
+matches = [c for c in containers if c["name"] == container_name]
+
+# Fall back only if the task definition has exactly one container.
+if not matches and len(containers) == 1:
+    matches = containers
 
 if len(matches) != 1:
+    names = [c["name"] for c in containers]
     raise SystemExit(
-        f"Expected exactly one container named {container_name}; "
-        f"found {len(matches)}"
+        f"Cannot uniquely identify container '{container_name}'. "
+        f"Available containers: {names}"
     )
 
 matches[0]["image"] = image_uri
@@ -130,6 +167,7 @@ PY
                         --query 'taskDefinition.taskDefinitionArn' \
                         --output text > registered-task-arn.txt
 
+                    echo "Registered task definition:"
                     cat registered-task-arn.txt
                 '''
             }
@@ -142,18 +180,22 @@ PY
 
                     TASK_ARN="$(cat registered-task-arn.txt)"
 
+                    echo "Deploying $IMAGE_URI"
+                    echo "To service $ECS_SERVICE"
+                    echo "Using task definition $TASK_ARN"
+
                     aws ecs update-service \
                         --cluster "$ECS_CLUSTER" \
                         --service "$ECS_SERVICE" \
                         --task-definition "$TASK_ARN" \
-                        --region "$AWS_REGION" \
-                        --query 'service.serviceName' \
-                        --output text
+                        --region "$AWS_REGION"
 
                     aws ecs wait services-stable \
                         --cluster "$ECS_CLUSTER" \
                         --services "$ECS_SERVICE" \
                         --region "$AWS_REGION"
+
+                    echo "ECS service is stable."
                 '''
             }
         }
@@ -161,13 +203,19 @@ PY
 
     post {
         success {
-            echo 'Deployment completed successfully.'
+            echo "Deployment to ${env.TARGET_ENV} completed successfully."
         }
+
         failure {
-            echo 'Pipeline failed. Review the stage logs before retrying.'
+            echo "Pipeline failed for branch ${env.BRANCH_NAME}. Review the stage logs."
         }
+
         always {
-            sh 'rm -f task-definition-current.json task-definition-new.json registered-task-arn.txt || true'
+            sh '''
+                rm -f task-definition-current.json \
+                      task-definition-new.json \
+                      registered-task-arn.txt || true
+            '''
         }
     }
 }
