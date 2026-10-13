@@ -141,7 +141,7 @@ def clear_chat():
 # Streamlit app
 def main():
 
-    st.set_page_config(page_title="Gemini PDF Chatbot jenkins Automated", page_icon="🤖")
+    st.set_page_config(page_title="Gemini PDF Chatbot Jenkins Automated", page_icon="🤖")
 
     st.title("Chat with PDFs using Gemini 🤖")
 
