@@ -6,6 +6,9 @@ pipeline {
         timestamps()
         disableConcurrentBuilds()
     }
+    triggers {
+        githubPush()
+    }
 
     
 environment {
