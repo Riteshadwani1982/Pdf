@@ -143,7 +143,7 @@ def main():
 
     st.set_page_config(page_title="Gemini PDF Chatbot Jenkins Automated", page_icon="🤖")
 
-    st.title("Chat with PDFs using Gemini Jenkins Automated🤖")
+    st.title("Chat with PDFs using Gemini Jenkins Automated development🤖")
 
     with st.sidebar:
 
