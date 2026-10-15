@@ -1,4 +1,5 @@
 
+
 pipeline {
     agent any
 
@@ -45,6 +46,7 @@ pipeline {
                     echo "ECS Cluster: ${env.ECS_CLUSTER}"
                     echo "ECS Service: ${env.ECS_SERVICE}"
                     echo "Task Family: ${env.TASK_FAMILY}"
+                    echo "Container: ${env.CONTAINER_NAME}"
                 }
             }
         }
@@ -64,9 +66,7 @@ pipeline {
                     ).trim()
 
                     env.IMAGE_TAG = "${env.TARGET_ENV}-${commitSha}"
-
-                    env.IMAGE_URI =
-                        "${env.ECR_URI}:${env.IMAGE_TAG}"
+                    env.IMAGE_URI = "${env.ECR_URI}:${env.IMAGE_TAG}"
 
                     echo "Image tag: ${env.IMAGE_TAG}"
                     echo "Image URI: ${env.IMAGE_URI}"
@@ -125,7 +125,6 @@ import os
 with open("task-definition-current.json", encoding="utf-8") as f:
     task = json.load(f)
 
-# Remove AWS-generated fields before registering a new revision.
 for key in (
     "taskDefinitionArn",
     "revision",
@@ -144,7 +143,6 @@ image_uri = os.environ["IMAGE_URI"]
 containers = task.get("containerDefinitions", [])
 matches = [c for c in containers if c["name"] == container_name]
 
-# Fall back only if the task definition has exactly one container.
 if not matches and len(containers) == 1:
     matches = containers
 
@@ -203,19 +201,133 @@ PY
 
     post {
         success {
-            echo "Deployment to ${env.TARGET_ENV} completed successfully."
+            script {
+                sendTeamsNotification(
+                    'SUCCESS',
+                    'Good',
+                    'Deployment completed successfully.'
+                )
+            }
         }
 
         failure {
-            echo "Pipeline failed for branch ${env.BRANCH_NAME}. Review the stage logs."
+            script {
+                sendTeamsNotification(
+                    'FAILED',
+                    'Attention',
+                    'Pipeline or deployment failed. Check the Jenkins console logs.'
+                )
+            }
+        }
+
+        aborted {
+            script {
+                sendTeamsNotification(
+                    'ABORTED',
+                    'Warning',
+                    'The Jenkins pipeline was aborted.'
+                )
+            }
         }
 
         always {
             sh '''
                 rm -f task-definition-current.json \
                       task-definition-new.json \
-                      registered-task-arn.txt || true
+                      registered-task-arn.txt \
+                      teams-card.json || true
             '''
+
+            echo "Pipeline result: ${currentBuild.currentResult}"
+        }
+    }
+}
+
+def sendTeamsNotification(
+    String status,
+    String severity,
+    String details
+) {
+    withCredentials([
+        string(
+            credentialsId: 'teams-workflow-url',
+            variable: 'TEAMS_WORKFLOW_URL'
+        )
+    ]) {
+        def statusIcon = status == 'SUCCESS' ? '✅' :
+                         status == 'FAILED'  ? '❌' : '⚠️'
+
+        def branch = env.BRANCH_NAME ?: 'N/A'
+        def targetEnv = env.TARGET_ENV ?: 'N/A'
+        def ecsService = env.ECS_SERVICE ?: 'N/A'
+        def imageTag = env.IMAGE_TAG ?: 'Not generated'
+
+        def card = [
+            type: 'AdaptiveCard',
+            version: '1.4',
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            body: [
+                [
+                    type: 'TextBlock',
+                    text: "${statusIcon} Jenkins Deployment ${status}",
+                    weight: 'Bolder',
+                    size: 'Large',
+                    wrap: true,
+                    color: severity
+                ],
+                [
+                    type: 'TextBlock',
+                    text: details,
+                    wrap: true
+                ],
+                [
+                    type: 'FactSet',
+                    facts: [
+                        [title: 'Job', value: env.JOB_NAME ?: 'N/A'],
+                        [title: 'Branch', value: branch],
+                        [title: 'Environment', value: targetEnv],
+                        [title: 'Build', value: "#${env.BUILD_NUMBER}"],
+                        [title: 'ECS Service', value: ecsService],
+                        [title: 'Image Tag', value: imageTag]
+                    ]
+                ]
+            ],
+            actions: [
+                [
+                    type: 'Action.OpenUrl',
+                    title: 'View Jenkins Build',
+                    url: env.BUILD_URL
+                ]
+            ]
+        ]
+
+        writeFile(
+            file: 'teams-card.json',
+            text: groovy.json.JsonOutput.toJson(card)
+        )
+
+        try {
+            withEnv(["TEAMS_STATUS=${status}"]) {
+                sh '''
+                    set +x
+
+                    curl --fail-with-body --silent --show-error \
+                        --connect-timeout 10 \
+                        --max-time 30 \
+                        --retry 2 \
+                        --retry-delay 2 \
+                        -X POST \
+                        -H "Content-Type: application/json" \
+                        --data-binary @teams-card.json \
+                        "$TEAMS_WORKFLOW_URL"
+                '''
+            }
+            echo "Teams notification request sent for status: ${status}"
+        } catch (err) {
+            echo "WARNING: Teams notification failed: ${err.getMessage()}"
+            // Notification failure must not change the deployment result.
+        } finally {
+            sh 'rm -f teams-card.json || true'
         }
     }
 }
